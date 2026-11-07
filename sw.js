@@ -1,4 +1,4 @@
-const CACHE = 'recipe-v1';
+const CACHE = 'recipe-v2';
 const ASSETS = ['./', './index.html', './app.js', './classify.js', './style.css', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -30,7 +30,9 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (e.request.method !== 'GET') return;
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+  // 同じサイトのファイルは「通信優先・失敗時キャッシュ」で常に最新版を使う
+  if (url.origin !== location.origin) return;
+  e.respondWith(fetch(e.request).then(res => { const c = res.clone(); caches.open(CACHE).then(ca => ca.put(e.request, c)); return res; }).catch(() => caches.match(e.request, { ignoreSearch: true })));
 });
 
 function putShared(item) {

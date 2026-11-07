@@ -1,4 +1,4 @@
-import { FOLDERS, classify, splitRecipe } from './classify.js';
+import { FOLDERS, classify, splitRecipe, guessTitle } from './classify.js';
 
 // ---------- DB ----------
 let dbp;
@@ -37,12 +37,45 @@ function toast(msg, ms = 2200) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add('hidden'), ms);
 }
-function guessTitle(text) {
-  for (const l of (text || '').split(/\r?\n/)) {
-    const s = l.replace(/#\S+/g, '').replace(/https?:\/\/\S+/g, '').trim();
-    if (s.length >= 2) return s.slice(0, 40);
-  }
-  return '無題のレシピ';
+// ---------- インスタURLからキャプションを自動取得 ----------
+// ブラウザから直接インスタは読めないため、公開ページ読み取りサービス(r.jina.ai)を経由する
+function cleanIgUrl(u) {
+  const m = (u || '').match(/https?:\/\/(www\.)?instagram\.com\/(p|reel|reels|tv)\/([\w-]+)/);
+  return m ? `https://www.instagram.com/${m[2] === 'reels' ? 'reel' : m[2]}/${m[3]}/` : '';
+}
+async function fetchCaption(url) {
+  const ig = cleanIgUrl(url);
+  if (!ig) return null;
+  const res = await fetch('https://r.jina.ai/' + ig, { headers: { 'X-Return-Format': 'html' } });
+  if (!res.ok) throw new Error('取得失敗 ' + res.status);
+  const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+  const meta = p => doc.querySelector(`meta[property="${p}"]`)?.getAttribute('content') || '';
+  let cap = meta('og:description');
+  if (!cap) throw new Error('キャプションが見つかりません（非公開投稿？）');
+  // 末尾の「 - 日付、いいね…件 - アカウント名」を除去し、外側の「」を外す
+  cap = cap.replace(/\s+-\s+[^\n]*?(いいね|likes)[^\n]*$/i, '').trim();
+  cap = cap.replace(/^「([\s\S]*)」$/, '$1').trim();
+  cap = cap.replace(/^[\d,.]+\s*(likes?|件)[\s\S]*?:\s*"([\s\S]*)"\.?$/i, '$2').trim();
+  let image = null;
+  const img = meta('og:image');
+  if (img) { try { const r = await fetch(img); if (r.ok) image = await r.blob(); } catch { } }
+  return { text: cap, image, imageUrl: img };
+}
+async function autoCaption(r) {
+  if (!r.url || r.captionFetched) return false;
+  try {
+    toast('キャプションを取得中…', 30000);
+    const c = await fetchCaption(r.url);
+    if (!c) return false;
+    r.text = c.text + (r.text ? '\n\n' + r.text : '');
+    if (c.image) r.images = [c.image, ...(r.images || [])];
+    else if (c.imageUrl) r.cover = c.imageUrl;
+    r.captionFetched = true;
+    if (!r.title || r.title === '無題のレシピ') r.title = guessTitle(r.text);
+    if (!r.folderManual) r.folder = classify(r.title + '\n' + r.text);
+    toast('キャプションを取得しました✅');
+    return true;
+  } catch (e) { toast('キャプション自動取得に失敗：' + e.message + '（スクショで追加できます）', 5000); return false; }
 }
 const urls = new Map();
 function blobUrl(b) { if (!urls.has(b)) urls.set(b, URL.createObjectURL(b)); return urls.get(b); }
@@ -137,7 +170,8 @@ async function listView() {
 }
 function card(r) {
   const f = folder(r.folder);
-  const cv = r.images?.[0] ? `<img src="${blobUrl(r.images[0])}" alt="">` : f.emoji;
+  const cv = r.images?.[0] ? `<img src="${blobUrl(r.images[0])}" alt="">` :
+    r.cover ? `<img src="${esc(r.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith('${f.emoji}')">` : f.emoji;
   return `<button class="card" data-id="${r.id}"><div class="cv">${cv}</div><div class="t">${esc(r.title)}</div><div class="f">${f.emoji} ${f.label}${r.fav ? ' ⭐' : ''}</div></button>`;
 }
 
@@ -159,7 +193,8 @@ async function detailView(id) {
     ${ing.length ? `<div class="sec"><h3>🧺 材料</h3>${li(ing, 'i')}</div>` : ''}
     ${steps.length ? `<div class="sec"><h3>👩‍🍳 作り方</h3>${li(steps, 's')}</div>` : ''}
     ${rest.length ? `<div class="sec"><h3>📝 メモ</h3><div class="pre">${esc(rest.join('\n'))}</div></div>` : ''}
-    ${!r.text ? `<div class="sec note">まだレシピの文字がありません。キャプションやコメントのスクショを「＋スクショ読取」で追加してください。</div>` : ''}
+    ${r.url && !r.captionFetched ? `<div class="row"><button class="btn sub" id="cap">🔄 インスタのキャプションを取得</button></div>` : ''}
+    ${!r.text ? `<div class="sec note">まだレシピの文字がありません。コメントのレシピはスクショを「＋スクショ読取」で追加してください。</div>` : ''}
     ${r.images?.length ? `<div class="sec"><h3>🖼 画像</h3><div class="imgs">${r.images.map(b => `<img src="${blobUrl(b)}">`).join('')}</div></div>` : ''}
     <div class="row">
       <button class="btn sub" id="addShot">＋スクショ読取（コメント等）</button>
@@ -176,6 +211,8 @@ async function detailView(id) {
   $('#fsel').onchange = async e => { r.folder = e.target.value; r.folderManual = true; await put(r); toast('フォルダを変更しました'); };
   $('#fav').onclick = async () => { r.fav = !r.fav; await put(r); detailView(id); };
   $('#edit').onclick = () => { location.hash = `#/r/${id}/edit`; };
+  const capBtn = $('#cap');
+  if (capBtn) capBtn.onclick = async () => { capBtn.disabled = true; if (await autoCaption(r)) { await put(r); } detailView(id); };
   $('#reset').onclick = async () => { r.done = []; await put(r); detailView(id); };
   $('#addShot').onclick = () => pickImages(async files => { await appendImages(r, files); detailView(id); });
 }
@@ -235,11 +272,15 @@ function editView(r) {
   });
   $('#save').onclick = async () => {
     r.text = x.value.trim(); r.url = $('#u').value.trim();
-    r.title = ti.value.trim() || guessTitle(r.text);
+    r.title = ti.value.trim();
     r.folder = fo.value; r.folderManual = manual;
     r.images = [...(r.images || []), ...newImgs];
     r.updated = Date.now();
-    await put(r); toast('保存しました');
+    $('#save').disabled = true;
+    const fetched = await autoCaption(r);
+    if (fetched && manual) r.folder = fo.value;
+    if (!r.title) r.title = guessTitle(r.text);
+    await put(r); if (!fetched) toast('保存しました');
     location.replace('#/r/' + r.id);
   };
   if (!isNew) $('#del').onclick = async () => { if (confirm('このレシピを削除しますか？')) { await del(r.id); location.replace('#/'); } };
@@ -277,6 +318,7 @@ async function inboxView() {
     let r = $('#dst').value === 'new' ? null : await get($('#dst').value);
     if (!r) r = { id: crypto.randomUUID(), title: '無題のレシピ', url: '', text: '', folder: 'other', images: [], created: Date.now() };
     if (link && !r.url) r.url = link;
+    await autoCaption(r);
     if (bodyText) { r.text = (r.text ? r.text + '\n\n' : '') + bodyText; if (r.title === '無題のレシピ') r.title = guessTitle(r.text); }
     if (!r.folderManual) r.folder = classify(r.title + '\n' + r.text);
     r.updated = Date.now();

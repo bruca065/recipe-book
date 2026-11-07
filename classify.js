@@ -58,8 +58,10 @@ export function splitRecipe(text) {
   const ing = [], steps = [], rest = [];
   let mode = 'rest';
   for (const l of lines) {
-    if (/^[【\[<＜■●◆▼☆★]?\s*(材料|用意するもの)/.test(l)) { mode = 'ing'; continue; }
-    if (/^[【\[<＜■●◆▼☆★]?\s*(作り方|手順|つくりかた|レシピ)/.test(l)) { mode = 'steps'; continue; }
+    const head = l.length <= 24;
+    if (head && /^.{0,3}(材料|用意するもの|ざいりょう)/.test(l)) { mode = 'ing'; continue; }
+    if (head && /^.{0,3}(作り方|作りかた|つくり方|つくりかた|手順|工程)/.test(l)) { mode = 'steps'; continue; }
+    if (/^[-–—_=─━]{4,}/.test(l) || /^.{0,3}(POINT|ポイント|コツ)/i.test(l)) { mode = 'rest'; rest.push(l); continue; }
     if (/^#/.test(l)) { mode = 'rest'; rest.push(l); continue; }
     if (mode === 'ing') ing.push(l);
     else if (mode === 'steps') steps.push(l);
@@ -67,4 +69,18 @@ export function splitRecipe(text) {
     else rest.push(l);
   }
   return { ing, steps, rest };
+}
+
+// 料理名の推定：【れんこんメンチカツ】のような見出しを優先
+export function guessTitle(text) {
+  const m = (text || '').match(/[【\[]([^】\]\n]{2,30})[】\]]/g) || [];
+  for (const b of m) {
+    const s = b.slice(1, -1).trim();
+    if (!/材料|作り方|作りかた|手順|ポイント|POINT/i.test(s)) return s;
+  }
+  for (const l of (text || '').split(/\r?\n/)) {
+    const s = l.replace(/#\S+/g, '').replace(/https?:\/\/\S+/g, '').replace(/^[「『]/, '').trim();
+    if (s.length >= 2) return s.slice(0, 40);
+  }
+  return '無題のレシピ';
 }
