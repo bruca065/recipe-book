@@ -40,13 +40,22 @@ function toast(msg, ms = 2200) {
 // ---------- インスタURLからキャプションを自動取得 ----------
 // ブラウザから直接インスタは読めないため、公開ページ読み取りサービス(r.jina.ai)を経由する
 function cleanIgUrl(u) {
-  const m = (u || '').match(/https?:\/\/(www\.)?instagram\.com\/(p|reel|reels|tv)\/([\w-]+)/);
-  return m ? `https://www.instagram.com/${m[2] === 'reels' ? 'reel' : m[2]}/${m[3]}/` : '';
+  u = (u || '').match(/https?:\/\/\S+/)?.[0] || '';
+  // instagram.com/reel/ID, /p/ID, /ユーザー名/reel/ID などに対応
+  const m = u.match(/https?:\/\/(?:www\.|m\.)?instagram\.com\/(?!share\/)(?:[\w.]+\/)?(p|reel|reels|tv)\/([\w-]+)/i);
+  if (m) return `https://www.instagram.com/${m[1].toLowerCase() === 'reels' ? 'reel' : m[1].toLowerCase()}/${m[2]}/`;
+  // /share/… や instagr.am などの短縮リンクはそのまま渡す（読み取りサービスがリダイレクトを辿る）
+  if (/https?:\/\/(?:www\.)?(instagram\.com|instagr\.am)\//i.test(u)) return u.replace(/[?#].*$/, '');
+  return '';
 }
 async function fetchCaption(url) {
   const ig = cleanIgUrl(url);
   if (!ig) return null;
-  const res = await fetch('https://r.jina.ai/' + ig, { headers: { 'X-Return-Format': 'html' } });
+  let res;
+  for (let i = 0; i < 2; i++) {  // 一時的な失敗に備えて1回だけ再試行
+    try { res = await fetch('https://r.jina.ai/' + ig, { headers: { 'X-Return-Format': 'html' } }); if (res.ok) break; }
+    catch (e) { if (i) throw new Error('通信できませんでした'); }
+  }
   if (!res.ok) throw new Error('取得失敗 ' + res.status);
   const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
   const meta = p => doc.querySelector(`meta[property="${p}"]`)?.getAttribute('content') || '';
@@ -265,6 +274,32 @@ function editView(r) {
   x.oninput = autoF; ti.oninput = autoF; autoF();
   fo.onchange = () => { manual = true; };
   const newImgs = [];
+  // URLを貼った時点でキャプションを取得し、料理名と本文に自動で入れる
+  const u = $('#u');
+  let fetchedFor = r.captionFetched ? cleanIgUrl(r.url) : '', fetched = null, ft;
+  const tryFetch = async () => {
+    const ig = cleanIgUrl(u.value);
+    if (!ig || ig === fetchedFor) return;
+    fetchedFor = ig;
+    toast('キャプションを取得中…', 30000);
+    try {
+      const c = await fetchCaption(u.value);
+      if (cleanIgUrl(u.value) !== ig) return;
+      fetched = c;
+      x.value = c.text + (x.value.trim() ? '\n\n' + x.value : '');
+      if (!ti.value.trim()) ti.value = guessTitle(x.value);
+      autoF();
+      toast('料理名とレシピを入れました✅');
+    } catch (e) { fetchedFor = ''; toast('自動取得に失敗：' + e.message + '（スクショで追加できます）', 5000); }
+  };
+  u.oninput = () => { clearTimeout(ft); ft = setTimeout(tryFetch, 500); };
+  u.onchange = tryFetch;
+  // 本文欄にURLだけ貼った場合もURL欄へ移して取得する
+  x.addEventListener('input', () => {
+    if (!u.value.trim() && cleanIgUrl(x.value) && x.value.trim().split(/\s+/).length === 1) {
+      u.value = x.value.trim(); x.value = ''; tryFetch();
+    }
+  });
   $('#shot').onclick = () => pickImages(async files => {
     newImgs.push(...files);
     try { const t = await ocr(files, m => toast(m, 60000)); x.value = (x.value ? x.value + '\n\n' : '') + t; autoF(); toast('読み取りました✅'); }
@@ -277,10 +312,15 @@ function editView(r) {
     r.images = [...(r.images || []), ...newImgs];
     r.updated = Date.now();
     $('#save').disabled = true;
-    const fetched = await autoCaption(r);
-    if (fetched && manual) r.folder = fo.value;
+    if (fetched && cleanIgUrl(r.url) === fetchedFor) {
+      if (fetched.image) r.images = [fetched.image, ...r.images];
+      else if (fetched.imageUrl) r.cover = fetched.imageUrl;
+      r.captionFetched = true;
+    }
+    const got = await autoCaption(r);
+    if (got && manual) r.folder = fo.value;
     if (!r.title) r.title = guessTitle(r.text);
-    await put(r); if (!fetched) toast('保存しました');
+    await put(r); if (!got) toast('保存しました');
     location.replace('#/r/' + r.id);
   };
   if (!isNew) $('#del').onclick = async () => { if (confirm('このレシピを削除しますか？')) { await del(r.id); location.replace('#/'); } };
