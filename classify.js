@@ -53,19 +53,40 @@ export function classify(text) {
 }
 
 // OCR等の文字から「材料」「作り方」をざっくり切り出す
+const ING_KW = '材料|用意するもの|ざいりょう';
+const STEP_KW = '作り方|作りかた|つくり方|つくりかた|手順|工程';
+const STEP_MARK = /^([①-⑳]|[\d０-９]{1,2}\s*[\.\)．）、]|[\(（][\d０-９]{1,2}[\)）]|STEP\s*\d)/i;
+// 見出しの判定：「く材料＞」「【作り方】」「材料（2人分）」はOK、「①材料を混ぜる」のような手順文はNG
+function heading(l) {
+  if (l.length > 24 || STEP_MARK.test(l)) return null;
+  const m = l.match(new RegExp(`^[^\\p{L}\\p{N}]{0,3}[くぐ]?(${ING_KW}|${STEP_KW})(.*)$`, 'u'));
+  if (!m) return null;
+  const tail = m[2].replace(/[\s:：】\]＞>〉》」』)）◆◇■□●○★☆♪・\-–—ー~〜]/g, '');
+  // 残りは「2人分」「（4個分）」程度まで。助詞や動詞が続くなら本文
+  if (tail.length > 10 || /[をにでてがはるた]/.test(tail.replace(/[\d０-９]+.{0,3}分|人前|分量/g, ''))) return null;
+  return new RegExp(ING_KW).test(m[1]) ? 'ing' : 'steps';
+}
+
 export function splitRecipe(text) {
-  const lines = (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  // 改行が消えて1行に詰まった本文でも、見出しや①②の前で区切り直す
+  const src = (text || '')
+    .replace(new RegExp(`([^\\n])\\s*((?:[【\\[＜<〈《◆■●★]|[くぐ](?=(?:${ING_KW}|${STEP_KW})[＞>〉》]))(?:${ING_KW}|${STEP_KW}))`, 'g'), '$1\n$2')
+    .replace(new RegExp(`^(.{0,3}(?:${ING_KW}|${STEP_KW}).{0,10}?[＞>〉》】\\]])[ \\t　]*(?=\\S)`, 'gm'), '$1\n')
+    .replace(/([^\n①-⑳〜~、])\s*([①-⑳])(?![をでのとにへ、〜~ー\-①-⑳])/g, '$1\n$2')
+    .replace(/[ \t　]+(?=[・◯◎●○]|[-–—_=─━]{4,}|📍|#)/g, '\n');
+  const lines = src.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const ing = [], steps = [], rest = [];
   let mode = 'rest';
   for (const l of lines) {
-    const head = l.length <= 24;
-    if (head && /^.{0,3}(材料|用意するもの|ざいりょう)/.test(l)) { mode = 'ing'; continue; }
-    if (head && /^.{0,3}(作り方|作りかた|つくり方|つくりかた|手順|工程)/.test(l)) { mode = 'steps'; continue; }
+    const h = heading(l);
+    if (h) { mode = h; continue; }
     if (/^[-–—_=─━]{4,}/.test(l) || /^.{0,3}(POINT|ポイント|コツ)/i.test(l)) { mode = 'rest'; rest.push(l); continue; }
     if (/^#/.test(l)) { mode = 'rest'; rest.push(l); continue; }
+    // 材料の途中でも ①・1. が出てきたら作り方に切り替える
+    if (mode === 'ing' && STEP_MARK.test(l)) mode = 'steps';
     if (mode === 'ing') ing.push(l);
     else if (mode === 'steps') steps.push(l);
-    else if (/^([①-⑳]|\d+[\.\)．）]|STEP)/i.test(l)) steps.push(l);
+    else if (STEP_MARK.test(l)) steps.push(l);
     else rest.push(l);
   }
   return { ing, steps, rest };
