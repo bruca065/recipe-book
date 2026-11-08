@@ -40,3 +40,9 @@ textarea.in{min-height:220px;line-height:1.6}
 .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#333;color:#fff;padding:10px 16px;border-radius:999px;font-size:14px;z-index:20;max-width:90vw}
 .big .chk{font-size:21px}
 .note{font-size:13px;color:var(--sub);line-height:1.6}
+.frow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(128,128,128,.2)}
+.frow span{flex:1;min-width:0}
+.frow small{display:block;opacity:.6;font-size:.8em;overflow-wrap:anywhere}
+.frow.off span{opacity:.45}
+.frow .btn{padding:6px 10px;font-size:.85em}
+.fedit{margin:10px 0;padding:12px;border-radius:12px;background:rgba(128,128,128,.1)}

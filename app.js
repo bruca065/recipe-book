@@ -32,7 +32,28 @@ const get = id => tx('recipes', 'readonly', st => st.get(id));
 const $ = s => document.querySelector(s);
 const view = $('#view');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const folder = k => FOLDERS.find(f => f.key === k) || FOLDERS[FOLDERS.length - 1];
+// ---------- フォルダ（標準＋自分で追加したもの。設定はこのスマホに保存） ----------
+const FKEY = 'recipe-folders';
+let fcfg = (() => { try { return JSON.parse(localStorage.getItem(FKEY)) || {}; } catch { return {}; } })();
+fcfg.custom ||= []; fcfg.hidden ||= [];
+function saveFolderCfg() { try { localStorage.setItem(FKEY, JSON.stringify(fcfg)); } catch { } }
+const OTHER = FOLDERS.find(f => f.key === 'other');
+function folders() {
+  return [...FOLDERS.filter(f => f.key !== 'other' && !fcfg.hidden.includes(f.key)), ...fcfg.custom, OTHER];
+}
+const folder = k => folders().find(f => f.key === k) || OTHER;
+// 自分のフォルダのキーワードを優先し、なければ標準の自動判定
+function autoFolder(text) {
+  const t = (text || '').toLowerCase();
+  let best = null, bs = 0;
+  for (const f of fcfg.custom) {
+    const s = (f.words || []).filter(w => w && t.includes(w.toLowerCase())).length;
+    if (s > bs) { best = f.key; bs = s; }
+  }
+  if (best) return best;
+  const k = classify(text);
+  return fcfg.hidden.includes(k) ? 'other' : k;
+}
 function toast(msg, ms = 2200) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add('hidden'), ms);
@@ -81,7 +102,7 @@ async function autoCaption(r) {
     else if (c.imageUrl) r.cover = c.imageUrl;
     r.captionFetched = true;
     if (!r.title || r.title === '無題のレシピ') r.title = guessTitle(r.text);
-    if (!r.folderManual) r.folder = classify(r.title + '\n' + r.text);
+    if (!r.folderManual) r.folder = autoFolder(r.title + '\n' + r.text);
     toast('キャプションを取得しました✅');
     return true;
   } catch (e) { toast('キャプション自動取得に失敗：' + e.message + '（スクショで追加できます）', 5000); return false; }
@@ -167,7 +188,7 @@ async function listView() {
     <div class="chips">
       <button class="chip ${state.folder === 'all' ? 'on' : ''}" data-f="all">すべて<b>${rs.length}</b></button>
       <button class="chip ${state.folder === 'fav' ? 'on' : ''}" data-f="fav">⭐ お気に入り<b>${rs.filter(r => r.fav).length}</b></button>
-      ${FOLDERS.map(f => `<button class="chip ${state.folder === f.key ? 'on' : ''}" data-f="${f.key}">${f.emoji} ${f.label}<b>${cnt(f.key)}</b></button>`).join('')}
+      ${folders().map(f => `<button class="chip ${state.folder === f.key ? 'on' : ''}" data-f="${f.key}">${f.emoji} ${f.label}<b>${cnt(f.key)}</b></button>`).join('')}
     </div>
     ${shown.length ? `<div class="grid">${shown.map(card).join('')}</div>` :
       `<div class="empty">${rs.length ? '該当するレシピがありません' : 'まだレシピがありません<br>インスタの投稿で「シェア」→「レシピ帳」で保存できます<br>右下の＋から手動でも追加できます'}</div>`}
@@ -195,7 +216,7 @@ async function detailView(id) {
   view.innerHTML = `<div class="wrap big">
     <span class="awake" id="awake">💡 画面点灯キープ中</span>
     <div class="row">
-      <select class="in" id="fsel" style="flex:1">${FOLDERS.map(f => `<option value="${f.key}" ${f.key === r.folder ? 'selected' : ''}>${f.emoji} ${f.label}</option>`).join('')}</select>
+      <select class="in" id="fsel" style="flex:1">${folders().map(f => `<option value="${f.key}" ${f.key === r.folder ? 'selected' : ''}>${f.emoji} ${f.label}</option>`).join('')}</select>
       <button class="btn sub" id="fav">${r.fav ? '⭐' : '☆'}</button>
     </div>
     ${r.url ? `<div class="row"><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">▶ インスタで動画を見る</a></div>` : ''}
@@ -238,7 +259,7 @@ async function appendImages(r, files) {
     const txt = await ocr(files, m => toast(m, 60000));
     if (txt) {
       r.text = (r.text ? r.text + '\n\n' : '') + txt;
-      if (!r.folderManual) r.folder = classify(r.title + '\n' + r.text);
+      if (!r.folderManual) r.folder = autoFolder(r.title + '\n' + r.text);
       if (r.title === '無題のレシピ') r.title = guessTitle(r.text);
       await put(r);
     }
@@ -258,7 +279,7 @@ function editView(r) {
     <textarea class="in" id="x" placeholder="【材料】&#10;豚こま 200g&#10;…&#10;&#10;【作り方】&#10;①…">${esc(r.text)}</textarea>
     <div class="row"><button class="btn sub" id="shot">📷 スクショから読み取って追記</button></div>
     <label class="f">フォルダ <span id="auto"></span></label>
-    <select class="in" id="fo">${FOLDERS.map(f => `<option value="${f.key}" ${f.key === r.folder ? 'selected' : ''}>${f.emoji} ${f.label}</option>`).join('')}</select>
+    <select class="in" id="fo">${folders().map(f => `<option value="${f.key}" ${f.key === r.folder ? 'selected' : ''}>${f.emoji} ${f.label}</option>`).join('')}</select>
     <div class="row" style="margin-top:20px">
       <button class="btn" id="save" style="flex:1">保存</button>
       ${isNew ? '' : '<button class="btn warn" id="del">削除</button>'}
@@ -267,7 +288,7 @@ function editView(r) {
   let manual = !!r.folderManual;
   const x = $('#x'), fo = $('#fo'), ti = $('#t');
   const autoF = () => {
-    const k = classify(ti.value + '\n' + x.value);
+    const k = autoFolder(ti.value + '\n' + x.value);
     $('#auto').textContent = `（自動判定：${folder(k).emoji}${folder(k).label}）`;
     if (!manual) fo.value = k;
   };
@@ -360,7 +381,7 @@ async function inboxView() {
     if (link && !r.url) r.url = link;
     await autoCaption(r);
     if (bodyText) { r.text = (r.text ? r.text + '\n\n' : '') + bodyText; if (r.title === '無題のレシピ') r.title = guessTitle(r.text); }
-    if (!r.folderManual) r.folder = classify(r.title + '\n' + r.text);
+    if (!r.folderManual) r.folder = autoFolder(r.title + '\n' + r.text);
     r.updated = Date.now();
     await put(r); await finish();
     if (hasImg) await appendImages(r, it.images);
@@ -374,6 +395,11 @@ async function settingsView() {
   setHeader('設定・バックアップ', true);
   const n = (await all('recipes')).length;
   view.innerHTML = `<div class="wrap">
+    <div class="sec"><h3>📂 フォルダ</h3>
+      <p class="note">自分用のフォルダを追加できます。キーワードを入れておくと、その言葉が入ったレシピは自動でそのフォルダに入ります。使わない標準フォルダは非表示にできます。</p>
+      <div id="flist"></div>
+      <div id="fform"></div>
+      <div class="row"><button class="btn" id="fadd">＋ フォルダを追加</button></div></div>
     <div class="sec"><h3>💾 バックアップ</h3>
       <p class="note">レシピはこのスマホの中だけに保存されます（${n}件）。機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。</p>
       <div class="row"><button class="btn" id="exp">書き出し</button><button class="btn sub" id="imp">読み込み</button></div></div>
@@ -381,15 +407,16 @@ async function settingsView() {
       1. このページをChromeで開き「ホーム画面に追加（アプリをインストール）」<br>
       2. インスタの投稿で「シェア ▶ レシピ帳」→ 保存<br>
       3. キャプションやコメントのレシピはスクショして「共有 ▶ レシピ帳」→ 同じレシピに追加（文字を自動読取）<br>
-      4. フォルダは自動で振り分け。違っていたら詳細画面で変更できます<br>
+      4. フォルダは自動で振り分け。違っていたら詳細画面で変更できます。上の「📂 フォルダ」で自分用のフォルダも作れます<br>
       5. レシピを開いている間は画面が消えません</p></div>
   </div>`;
+  folderSettings();
   $('#exp').onclick = async () => {
     const rs = await all('recipes');
     const toData = b => new Promise(res => { const f = new FileReader(); f.onload = () => res(f.result); f.readAsDataURL(b); });
     for (const r of rs) r.images = await Promise.all((r.images || []).map(toData));
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify({ v: 1, recipes: rs })], { type: 'application/json' }));
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ v: 1, recipes: rs, folders: fcfg })], { type: 'application/json' }));
     a.download = `recipes-${new Date().toISOString().slice(0, 10)}.json`; a.click();
   };
   $('#imp').onclick = () => {
@@ -397,12 +424,84 @@ async function settingsView() {
     f.onchange = async () => {
       try {
         const d = JSON.parse(await f.files[0].text());
+        if (d.folders) {  // 読み込んだフォルダ設定を、今の設定に足し合わせる
+          for (const f of d.folders.custom || []) if (!fcfg.custom.some(c => c.key === f.key)) fcfg.custom.push(f);
+          fcfg.hidden = [...new Set([...fcfg.hidden, ...(d.folders.hidden || [])])];
+          saveFolderCfg();
+        }
         for (const r of d.recipes) { r.images = await Promise.all((r.images || []).map(u => fetch(u).then(x => x.blob()))); await put(r); }
-        toast(`${d.recipes.length}件読み込みました`);
+        toast(`${d.recipes.length}件読み込みました`); settingsView();
       } catch (e) { toast('読み込み失敗：' + e.message, 4000); }
     };
     f.click();
   };
+}
+
+// フォルダ一覧の表示と、追加・編集・削除・非表示
+function folderSettings() {
+  const list = $('#flist'), form = $('#fform');
+  const rows = [
+    ...fcfg.custom.map(f => `<div class="frow"><span>${esc(f.emoji)} ${esc(f.label)}${f.words?.length ? `<small>🔑 ${esc(f.words.join('、'))}</small>` : ''}</span>
+      <button class="btn sub" data-ed="${f.key}">編集</button><button class="btn warn" data-rm="${f.key}">削除</button></div>`),
+    ...FOLDERS.filter(f => f.key !== 'other').map(f => { const h = fcfg.hidden.includes(f.key);
+      return `<div class="frow ${h ? 'off' : ''}"><span>${f.emoji} ${f.label}<small>標準</small></span><button class="btn sub" data-hide="${f.key}">${h ? '表示する' : '非表示'}</button></div>`; }),
+    `<div class="frow"><span>${OTHER.emoji} ${OTHER.label}<small>標準・どこにも当てはまらないレシピ</small></span></div>`
+  ];
+  list.innerHTML = rows.join('');
+  const edit = f => {
+    const isNew = !f;
+    form.innerHTML = `<div class="fedit">
+      <div class="row"><input class="in" id="fe" value="${esc(f?.emoji || '📁')}" style="width:4.2em;text-align:center" maxlength="4">
+      <input class="in" id="fl" value="${esc(f?.label || '')}" placeholder="フォルダ名（例：作り置き）" style="flex:1"></div>
+      <label class="f">自動で入れるキーワード（任意・「、」やスペース区切り）</label>
+      <input class="in" id="fw" value="${esc((f?.words || []).join('、'))}" placeholder="例：作り置き、冷凍、常備菜">
+      <div class="row"><button class="btn" id="fok" style="flex:1">${isNew ? '追加' : '保存'}</button><button class="btn sub" id="fno">やめる</button></div></div>`;
+    $('#fl').focus();
+    $('#fno').onclick = () => { form.innerHTML = ''; };
+    $('#fok').onclick = async () => {
+      const label = $('#fl').value.trim();
+      if (!label) { toast('フォルダ名を入れてください'); return; }
+      const g = f || { key: 'c_' + Date.now().toString(36) };
+      g.label = label; g.emoji = $('#fe').value.trim() || '📁';
+      g.words = $('#fw').value.split(/[、,，\s]+/).map(w => w.trim()).filter(Boolean);
+      if (isNew) fcfg.custom.push(g);
+      saveFolderCfg();
+      const n = await refile();
+      toast(`${isNew ? '追加' : '保存'}しました${n ? `（${n}件を振り分け直しました）` : ''}`, 3000);
+      settingsView();
+    };
+  };
+  $('#fadd').onclick = () => edit(null);
+  list.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => edit(fcfg.custom.find(f => f.key === b.dataset.ed)));
+  list.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+    const f = fcfg.custom.find(c => c.key === b.dataset.rm);
+    if (!confirm(`フォルダ「${f.label}」を削除しますか？
+（中のレシピは消えず、他のフォルダに移ります）`)) return;
+    fcfg.custom = fcfg.custom.filter(c => c !== f); saveFolderCfg();
+    await refile(f.key); toast('削除しました'); settingsView();
+  });
+  list.querySelectorAll('[data-hide]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.hide;
+    fcfg.hidden = fcfg.hidden.includes(k) ? fcfg.hidden.filter(x => x !== k) : [...fcfg.hidden, k];
+    saveFolderCfg();
+    const n = await refile(k);
+    toast(fcfg.hidden.includes(k) ? `非表示にしました${n ? `（${n}件を他のフォルダへ）` : ''}` : '表示に戻しました');
+    settingsView();
+  });
+}
+// フォルダ設定が変わったときにレシピを振り分け直す。gone=無くなったフォルダ（手動で入れた分も移す）
+async function refile(gone) {
+  const valid = new Set(folders().map(f => f.key));
+  let n = 0;
+  for (const r of await all('recipes')) {
+    const lost = !valid.has(r.folder) || r.folder === gone && !valid.has(gone);
+    if (r.folderManual && !lost) continue;
+    const k = autoFolder(r.title + '\n' + r.text);
+    if (lost) r.folderManual = false;
+    if (k !== r.folder) { r.folder = k; await put(r); n++; }
+    else if (lost) await put(r);
+  }
+  return n;
 }
 
 // ---------- 起動 ----------
