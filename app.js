@@ -212,7 +212,7 @@ async function detailView(id) {
   setHeader(r.title, true);
   const { ing, steps, rest } = splitRecipe(r.text);
   const done = new Set(r.done || []);
-  const li = (arr, p) => arr.map((l, i) => `<label class="chk ${done.has(p + i) ? 'done' : ''}"><input type="checkbox" data-k="${p + i}" ${done.has(p + i) ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('');
+  const li = (arr, p) => arr.map((l, i) => /^[【\[《〈＜<◆■][^】\]》〉＞>]{1,20}[】\]》〉＞>◆■]$/.test(l) ? `<div class="subh"><b>${esc(l)}</b></div>` : `<label class="chk ${done.has(p + i) ? 'done' : ''}"><input type="checkbox" data-k="${p + i}" ${done.has(p + i) ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('');
   view.innerHTML = `<div class="wrap big">
     <span class="awake" id="awake">💡 画面点灯キープ中</span>
     <div class="row">
@@ -221,7 +221,7 @@ async function detailView(id) {
     </div>
     ${r.url ? `<div class="row"><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">▶ インスタで動画を見る</a></div>` : ''}
     ${ing.length ? `<div class="sec"><h3>🧺 材料</h3>${li(ing, 'i')}</div>` : ''}
-    ${steps.length ? `<div class="sec"><h3>👩‍🍳 作り方</h3>${li(steps, 's')}</div>` : ''}
+    ${steps.length ? `<div class="sec"><h3>👩‍🍳 作り方</h3>${li(steps, 's')}</div>` : ing.length ? `<div class="sec note">👩‍🍳 作り方は文字で書かれていません（動画の中だけ）。▶で動画を見るか、コメント欄にあればスクショで追加してください。</div>` : ''}
     ${rest.length ? `<div class="sec"><h3>📝 メモ</h3><div class="pre">${esc(rest.join('\n'))}</div></div>` : ''}
     ${r.url && !r.captionFetched ? `<div class="row"><button class="btn sub" id="cap">🔄 インスタのキャプションを取得</button></div>` : ''}
     ${!r.text ? `<div class="sec note">まだレシピの文字がありません。コメントのレシピはスクショを「＋スクショ読取」で追加してください。</div>` : ''}

@@ -46,3 +46,4 @@ textarea.in{min-height:220px;line-height:1.6}
 .frow.off span{opacity:.45}
 .frow .btn{padding:6px 10px;font-size:.85em}
 .fedit{margin:10px 0;padding:12px;border-radius:12px;background:rgba(128,128,128,.1)}
+.subh{margin:10px 0 2px;color:var(--sub,#666);font-size:.95em}

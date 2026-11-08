@@ -62,10 +62,18 @@ function heading(l) {
   const m = l.match(new RegExp(`^[^\\p{L}\\p{N}]{0,3}[くぐ]?(${ING_KW}|${STEP_KW})(.*)$`, 'u'));
   if (!m) return null;
   const tail = m[2].replace(/[\s:：】\]＞>〉》」』)）◆◇■□●○★☆♪・\-–—ー~〜]/g, '');
+  if (/コツ|ポイント|POINT|動画|リール|はこちら/i.test(tail)) return null;  // 「作り方のコツ」はメモ扱い
   // 残りは「2人分」「（4個分）」程度まで。助詞や動詞が続くなら本文
   if (tail.length > 10 || /[をにでてがはるた]/.test(tail.replace(/[\d０-９]+.{0,3}分|人前|分量/g, ''))) return null;
   return new RegExp(ING_KW).test(m[1]) ? 'ing' : 'steps';
 }
+// 「・豚バラ肉 6枚」「砂糖　大さじ1」のような材料らしい行
+const QTY = '[\\d０-９]|大さじ|小さじ|大匙|小匙|適量|少々|適宜|お好み|ひとつまみ|少量|半分|半量|ひとかけ|一つまみ|カップ';
+const ING_LINE = new RegExp(`^[・\\-◯◎●○◆*＊]?\\s*[^\\s。]{1,20}?[\\s　:：…]+(?:${QTY})[^。！!？?]{0,12}$`);
+const BULLET = /^[・◯◎●○＊*]\s*[^。！!？?\s]{1,18}$/;
+const SUBHEAD = /^[【\[《〈＜<◆■]?[^\s。、]{1,14}[】\]》〉＞>◆■]?[:：]?$/;
+const isIng = l => ING_LINE.test(l);
+const SEP = /^[-–—_=─━⸻]{2,}/;
 
 export function splitRecipe(text) {
   // 改行が消えて1行に詰まった本文でも、見出しや①②の前で区切り直す
@@ -73,22 +81,34 @@ export function splitRecipe(text) {
     .replace(new RegExp(`([^\\n])\\s*((?:[【\\[＜<〈《◆■●★]|[くぐ](?=(?:${ING_KW}|${STEP_KW})[＞>〉》]))(?:${ING_KW}|${STEP_KW}))`, 'g'), '$1\n$2')
     .replace(new RegExp(`^(.{0,3}(?:${ING_KW}|${STEP_KW}).{0,10}?[＞>〉》】\\]])[ \\t　]*(?=\\S)`, 'gm'), '$1\n')
     .replace(/([^\n①-⑳〜~、])\s*([①-⑳])(?![をでのとにへ、〜~ー\-①-⑳])/g, '$1\n$2')
-    .replace(/[ \t　]+(?=[・◯◎●○]|[-–—_=─━]{4,}|📍|#)/g, '\n');
+    .replace(/[ \t　]+(?=[・◯◎●○]|[-–—_=─━⸻]{2,}|📍|#)/g, '\n');
   const lines = src.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const ing = [], steps = [], rest = [];
-  let mode = 'rest';
-  for (const l of lines) {
+  let mode = 'rest', auto = false;  // auto=見出しなしで材料らしい行を拾っている途中
+  lines.forEach((l, i) => {
     const h = heading(l);
-    if (h) { mode = h; continue; }
-    if (/^[-–—_=─━]{4,}/.test(l) || /^.{0,3}(POINT|ポイント|コツ)/i.test(l)) { mode = 'rest'; rest.push(l); continue; }
-    if (/^#/.test(l)) { mode = 'rest'; rest.push(l); continue; }
+    if (h) { mode = h; auto = false; return; }
+    if (SEP.test(l) || /^.{0,3}(POINT|ポイント|コツ)/i.test(l) || /^【[^】]*(コツ|ポイント)[^】]*】/.test(l)) { mode = 'rest'; auto = false; rest.push(l); return; }
+    if (/^#/.test(l)) { mode = 'rest'; auto = false; rest.push(l); return; }
     // 材料の途中でも ①・1. が出てきたら作り方に切り替える
-    if (mode === 'ing' && STEP_MARK.test(l)) mode = 'steps';
-    if (mode === 'ing') ing.push(l);
-    else if (mode === 'steps') steps.push(l);
+    if (mode === 'ing' && STEP_MARK.test(l)) { mode = 'steps'; auto = false; }
+    if (mode === 'ing') {
+      // 見出しなしで拾った材料ブロックは、材料らしくない行が来たら終わり
+      if (!auto || isIng(l) || BULLET.test(l)) { ing.push(l); return; }
+      mode = 'rest'; auto = false;
+    }
+    // 見出しが無くても「【甘辛タレ】＋材料行」「材料行が続く」は材料として拾う
+    if (!STEP_MARK.test(l)) {
+      const next = lines[i + 1] || '', next2 = lines[i + 2] || '';
+      const ingNext = isIng(next) || (BULLET.test(next) && isIng(next2));
+      if (SUBHEAD.test(l) && !BULLET.test(l) && ingNext) { ing.push(l); mode = 'ing'; auto = true; return; }
+      if (isIng(l) && (ingNext || BULLET.test(next))) { ing.push(l); mode = 'ing'; auto = true; return; }
+      if (mode !== 'steps' && BULLET.test(l) && isIng(next)) { ing.push(l); mode = 'ing'; auto = true; return; }
+    }
+    if (mode === 'steps') steps.push(l);
     else if (STEP_MARK.test(l)) steps.push(l);
     else rest.push(l);
-  }
+  });
   return { ing, steps, rest };
 }
 
