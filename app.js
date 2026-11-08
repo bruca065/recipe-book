@@ -35,11 +35,17 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 // ---------- フォルダ（標準＋自分で追加したもの。設定はこのスマホに保存） ----------
 const FKEY = 'recipe-folders';
 let fcfg = (() => { try { return JSON.parse(localStorage.getItem(FKEY)) || {}; } catch { return {}; } })();
-fcfg.custom ||= []; fcfg.hidden ||= [];
+fcfg.custom ||= []; fcfg.hidden ||= []; fcfg.order ||= [];
 function saveFolderCfg() { try { localStorage.setItem(FKEY, JSON.stringify(fcfg)); } catch { } }
 const OTHER = FOLDERS.find(f => f.key === 'other');
+// 並び順（fcfg.order）に従って並べる。順番に無いものは標準→自分用の順で後ろへ
+function sortedFolders() {
+  const all = [...FOLDERS.filter(f => f.key !== 'other'), ...fcfg.custom];
+  const pos = k => { const i = fcfg.order.indexOf(k); return i < 0 ? 1000 + all.findIndex(f => f.key === k) : i; };
+  return all.sort((a, b) => pos(a.key) - pos(b.key));
+}
 function folders() {
-  return [...FOLDERS.filter(f => f.key !== 'other' && !fcfg.hidden.includes(f.key)), ...fcfg.custom, OTHER];
+  return [...sortedFolders().filter(f => !fcfg.hidden.includes(f.key)), OTHER];
 }
 const folder = k => folders().find(f => f.key === k) || OTHER;
 // 自分のフォルダのキーワードを優先し、なければ標準の自動判定
@@ -396,7 +402,7 @@ async function settingsView() {
   const n = (await all('recipes')).length;
   view.innerHTML = `<div class="wrap">
     <div class="sec"><h3>📂 フォルダ</h3>
-      <p class="note">自分用のフォルダを追加できます。キーワードを入れておくと、その言葉が入ったレシピは自動でそのフォルダに入ります。使わない標準フォルダは非表示にできます。</p>
+      <p class="note">自分用のフォルダを追加できます。キーワードを入れておくと、その言葉が入ったレシピは自動でそのフォルダに入ります。使わない標準フォルダは非表示にできます。<b>≡</b> をつまんで上下に動かすと並び順を変えられます。</p>
       <div id="flist"></div>
       <div id="fform"></div>
       <div class="row"><button class="btn" id="fadd">＋ フォルダを追加</button></div></div>
@@ -427,6 +433,7 @@ async function settingsView() {
         if (d.folders) {  // 読み込んだフォルダ設定を、今の設定に足し合わせる
           for (const f of d.folders.custom || []) if (!fcfg.custom.some(c => c.key === f.key)) fcfg.custom.push(f);
           fcfg.hidden = [...new Set([...fcfg.hidden, ...(d.folders.hidden || [])])];
+          if (!fcfg.order.length && d.folders.order) fcfg.order = d.folders.order;
           saveFolderCfg();
         }
         for (const r of d.recipes) { r.images = await Promise.all((r.images || []).map(u => fetch(u).then(x => x.blob()))); await put(r); }
@@ -440,14 +447,14 @@ async function settingsView() {
 // フォルダ一覧の表示と、追加・編集・削除・非表示
 function folderSettings() {
   const list = $('#flist'), form = $('#fform');
+  const grip = k => `<span class="grip" data-k="${k}" aria-label="ドラッグで並べ替え">≡</span>`;
   const rows = [
-    ...fcfg.custom.map(f => `<div class="frow"><span>${esc(f.emoji)} ${esc(f.label)}${f.words?.length ? `<small>🔑 ${esc(f.words.join('、'))}</small>` : ''}</span>
-      <button class="btn sub" data-ed="${f.key}">編集</button><button class="btn warn" data-rm="${f.key}">削除</button></div>`),
-    ...FOLDERS.filter(f => f.key !== 'other').map(f => { const h = fcfg.hidden.includes(f.key);
-      return `<div class="frow ${h ? 'off' : ''}"><span>${f.emoji} ${f.label}<small>標準</small></span><button class="btn sub" data-hide="${f.key}">${h ? '表示する' : '非表示'}</button></div>`; }),
+    ...sortedFolders().map(f => f.key.startsWith('c_') ? `<div class="frow" data-k="${f.key}">${grip(f.key)}<span>${esc(f.emoji)} ${esc(f.label)}${f.words?.length ? `<small>🔑 ${esc(f.words.join('、'))}</small>` : ''}</span>
+      <button class="btn sub" data-ed="${f.key}">編集</button><button class="btn warn" data-rm="${f.key}">削除</button></div>` : (h => `<div class="frow ${h ? 'off' : ''}" data-k="${f.key}">${grip(f.key)}<span>${f.emoji} ${f.label}<small>標準</small></span><button class="btn sub" data-hide="${f.key}">${h ? '表示する' : '非表示'}</button></div>`)(fcfg.hidden.includes(f.key))),
     `<div class="frow"><span>${OTHER.emoji} ${OTHER.label}<small>標準・どこにも当てはまらないレシピ</small></span></div>`
   ];
   list.innerHTML = rows.join('');
+  dragSort(list);
   const edit = f => {
     const isNew = !f;
     form.innerHTML = `<div class="fedit">
@@ -487,6 +494,35 @@ function folderSettings() {
     const n = await refile(k);
     toast(fcfg.hidden.includes(k) ? `非表示にしました${n ? `（${n}件を他のフォルダへ）` : ''}` : '表示に戻しました');
     settingsView();
+  });
+}
+// ≡ をつまんで上下にドラッグ → 離したら並び順を保存（指でもマウスでも動く）
+function dragSort(list) {
+  list.querySelectorAll('.grip').forEach(g => g.onpointerdown = e => {
+    e.preventDefault();
+    const row = g.closest('.frow');
+    row.classList.add('drag');
+    let raf;
+    const move = ev => {
+      if (ev.pointerId !== e.pointerId) return;
+      // 画面の端に来たら自動でスクロール
+      const y = ev.clientY, H = innerHeight;
+      cancelAnimationFrame(raf);
+      if (y < 70 || y > H - 70) { const d = y < 70 ? -12 : 12; const tick = () => { scrollBy(0, d); raf = requestAnimationFrame(tick); }; tick(); }
+      const rows = [...list.querySelectorAll('.frow[data-k]')].filter(r => r !== row);
+      const after = rows.find(r => { const b = r.getBoundingClientRect(); return y < b.top + b.height / 2; });
+      if (after) list.insertBefore(row, after);
+      else list.insertBefore(row, rows.length ? rows[rows.length - 1].nextSibling : list.firstChild);
+    };
+    const up = () => {
+      cancelAnimationFrame(raf);
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      row.classList.remove('drag');
+      const order = [...list.querySelectorAll('.frow[data-k]')].map(r => r.dataset.k);
+      if (order.join() !== fcfg.order.join()) { fcfg.order = order; saveFolderCfg(); toast('並び順を保存しました'); }
+    };
+    // 行を動かすと指のキャプチャが外れるので、画面全体で動きを拾う
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   });
 }
 // フォルダ設定が変わったときにレシピを振り分け直す。gone=無くなったフォルダ（手動で入れた分も移す）
