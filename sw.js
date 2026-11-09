@@ -1,4 +1,4 @@
-const CACHE = 'recipe-v8';
+const CACHE = 'recipe-v9';
 const ASSETS = ['./', './index.html', './app.js', './classify.js', './style.css', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

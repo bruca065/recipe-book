@@ -137,3 +137,63 @@ export function guessServings(text) {
     t.split(/\n/).filter(l => /材料|分量|できあがり|出来上がり|[(（【<＜]/.test(l)).map(l => l.match(SV_OTHER)).find(Boolean);
   return m ? m[0].replace(/\s+/g, '').replace(/[~\-−]/g, '〜') : '';
 }
+
+// ---------- 人数に合わせた分量の計算 ----------
+// 基準の人数（「2〜3人分」なら少ない方の2）。人数の書き方でなければ 0
+export function baseServings(srv) {
+  const m = (srv || '').match(/(\d+(?:\.\d+)?)(?:〜\d+)?(?:人前|人分|人份|名分|食分|皿分|人用)/);
+  return m ? parseFloat(m[1]) : 0;
+}
+const SEASON = /塩|醤油|しょうゆ|しょう油|砂糖|さとう|みりん|酒|味噌|みそ|酢|こしょう|胡椒|コショウ|だし|ダシ|コンソメ|鶏がら|鶏ガラ|顆粒|ソース|ケチャップ|マヨ|オイスター|豆板醤|コチュジャン|甜麺醤|めんつゆ|ポン酢|ぽん酢|塩麹|はちみつ|蜂蜜|カレー粉|ルー|ナンプラー|にんにくチューブ|しょうがチューブ|わさび|からし|ラー油|ごま油|味の素|うま味|ほんだし|昆布茶|焼肉のたれ|たれ|タレ/;
+const SPOON = /大さじ|小さじ|大匙|小匙|カップ/;
+const NUM_RE = /(\d+)\s*と\s*(\d+)\s*\/\s*(\d+)|(\d+)\s*\/\s*(\d+)|(\d+(?:\.\d+)?)|([½⅓⅔¼¾])/g;
+const VULGAR = { '½': .5, '⅓': 1 / 3, '⅔': 2 / 3, '¼': .25, '¾': .75 };
+function tokVal(m) {
+  if (m[1]) return +m[1] + m[2] / m[3];
+  if (m[4]) return m[4] / m[5];
+  if (m[6]) return parseFloat(m[6]);
+  return VULGAR[m[7]];
+}
+function fmtSpoon(v) {        // 大さじ・小さじは分数で（1以上は 1/2 刻み、1未満は 1/4 刻み）
+  const q = v >= 1 ? Math.round(v * 2) * 2 : Math.max(1, Math.round(v * 4)), w = Math.floor(q / 4), r = q % 4;
+  const fr = ['', '1/4', '1/2', '3/4'][r];
+  return w && fr ? `${w}と${fr}` : w ? `${w}` : fr;
+}
+function fmtNum(v, unit) {
+  if (/^(g|グラム|ml|mL|cc|ミリ)/i.test(unit)) {
+    if (v >= 100) return String(Math.round(v / 10) * 10);
+    if (v >= 20) return String(Math.round(v / 5) * 5);
+    return String(Math.max(1, Math.round(v)));
+  }
+  // 個・本・枚などは 1/2個 のような分数で（1/3本 → 2/3本 のような3等分も残す）
+  const t3 = Math.round(v * 3);
+  if (v < 3 && t3 % 3 && Math.abs(v * 3 - t3) < 0.05) { const w = Math.floor(t3 / 3), r = t3 % 3; return w ? `${w}と${r}/3` : `${r}/3`; }
+  return fmtSpoon(v);
+}
+// 1行の数量を f 倍する。onlyUnits=true なら単位付きの量（大さじ・g・ml等）だけ変える（作り方の文向け）
+export function scaleLine(line, f, onlyUnits = false) {
+  if (!f || f === 1) return { text: line, season: false, changed: false };
+  // 全角数字だけ半角に（NFKCは①や½まで崩すので使わない）
+  const src = line.replace(/[０-９．／]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  const season = onlyUnits ? SPOON.test(src) : (SEASON.test(src) || SPOON.test(src));
+  let changed = false;
+  const text = src.replace(NUM_RE, (all, ...g) => {
+    const off = g[7], m = [all, ...g.slice(0, 7)];
+    const before = src.slice(Math.max(0, off - 4), off), after = src.slice(off + all.length, off + all.length + 4);
+    if (/^\s*(℃|度|W|秒|%|分(?!の)|時間|cm\s*角|mm)/.test(after) || /[①-⑳]$/.test(before)) return all;
+    const spoon = /(大さじ|小さじ|大匙|小匙|カップ)\s*$/.test(before);
+    const unit = (after.match(/^\s*(\S+)/) || [, ''])[1];
+    if (onlyUnits && !spoon && !/^(g|グラム|ml|mL|cc)/i.test(unit)) return all;
+    // 「〜3」のような範囲の後ろ側、名前の中の数字以外は全部対象
+    const v = tokVal(m) * f;
+    changed = true;
+    const out = v2 => spoon ? fmtSpoon(v2) : fmtNum(v2, unit);
+    if (season && f > 1 && (!onlyUnits || spoon)) {
+      // 調味料は単純に掛けると濃くなりやすいので「少なめ〜そのまま掛け算」の幅で出す
+      const lo = out(tokVal(m) * (1 + (f - 1) * 0.7)), hi = out(v);
+      return lo === hi ? hi : `${lo}〜${hi}`;
+    }
+    return out(v);
+  });
+  return { text, season: season && f > 1 && changed, changed };
+}

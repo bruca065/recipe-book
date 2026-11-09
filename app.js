@@ -1,4 +1,4 @@
-import { FOLDERS, classify, splitRecipe, guessTitle, guessServings } from './classify.js';
+import { FOLDERS, classify, splitRecipe, guessTitle, guessServings, baseServings, scaleLine } from './classify.js';
 
 // ---------- DB ----------
 let dbp;
@@ -219,7 +219,16 @@ async function detailView(id) {
   const { ing, steps, rest } = splitRecipe(r.text);
   const srv = guessServings(r.text);
   const done = new Set(r.done || []);
-  const li = (arr, p) => arr.map((l, i) => /^[【\[《〈＜<◆■][^】\]》〉＞>]{1,20}[】\]》〉＞>◆■]$/.test(l) ? `<div class="subh"><b>${esc(l)}</b></div>` : `<label class="chk ${done.has(p + i) ? 'done' : ''}"><input type="checkbox" data-k="${p + i}" ${done.has(p + i) ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('');
+  // 人数の切り替え：「2人分」と分かれば人数ボタン、分からなければ倍率ボタン
+  const base = baseServings(srv), f = r.scale || 1;
+  const opts = base ? [...new Set([1, 2, 3, 4, 5, 6, base])].sort((a, b) => a - b).map(n => ({ f: n / base, label: `${n}人` }))
+    : [[.5, '×½'], [1, '×1'], [1.5, '×1.5'], [2, '×2'], [3, '×3']].map(([v, label]) => ({ f: v, label }));
+  const cur = opts.find(o => Math.abs(o.f - f) < 1e-6);
+  const isHead = l => /^[【\[《〈＜<◆■][^】\]》〉＞>]{1,20}[】\]》〉＞>◆■]$/.test(l);
+  const ingS = ing.map(l => isHead(l) ? { text: l } : scaleLine(l, f));
+  const stepS = steps.map(l => scaleLine(l, f, true));
+  const anySeason = ingS.some(x => x.season);
+  const li = (arr, p) => arr.map((x, i) => isHead(x.text) ? `<div class="subh"><b>${esc(x.text)}</b></div>` : `<label class="chk ${done.has(p + i) ? 'done' : ''}"><input type="checkbox" data-k="${p + i}" ${done.has(p + i) ? 'checked' : ''}><span>${esc(x.text)}${x.season ? ' <span class="slt">🧂</span>' : ''}</span></label>`).join('');
   view.innerHTML = `<div class="wrap big">
     <span class="awake" id="awake">💡 画面点灯キープ中</span>
     <div class="row">
@@ -227,9 +236,11 @@ async function detailView(id) {
       <button class="btn sub" id="fav">${r.fav ? '⭐' : '☆'}</button>
     </div>
     ${r.url ? `<div class="row"><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">▶ インスタで動画を見る</a></div>` : ''}
-    ${srv ? `<div class="srv">🍽 分量：<b>${esc(srv)}</b></div>` : ''}
-    ${ing.length ? `<div class="sec"><h3>🧺 材料${srv ? `<span class="srvs">（${esc(srv)}）</span>` : ''}</h3>${li(ing, 'i')}</div>` : ''}
-    ${steps.length ? `<div class="sec"><h3>👩‍🍳 作り方</h3>${li(steps, 's')}</div>` : ing.length ? `<div class="sec note">👩‍🍳 作り方は文字で書かれていません（動画の中だけ）。▶で動画を見るか、コメント欄にあればスクショで追加してください。</div>` : ''}
+    ${srv ? `<div class="srv">🍽 分量：<b>${esc(srv)}</b>${f !== 1 ? ` → <b>${cur ? (base ? cur.label + '分' : cur.label) : '×' + f}</b>で計算中` : ''}</div>` : ''}
+    ${ing.length ? `<div class="sec"><h3>🔢 ${base ? '何人分作る？' : '何倍で作る？'}</h3><div class="scl">${opts.map(o => `<button class="sbtn ${cur === o ? 'on' : ''}" data-f="${o.f}">${o.label}</button>`).join('')}</div>
+      ${f !== 1 ? `<div class="snote">材料${steps.length ? 'と作り方の中の量（大さじ・g・ml）' : ''}を計算し直しています。${anySeason ? '<br>🧂＝調味料。そのまま掛け算すると濃くなりやすいので「少なめ〜掛け算どおり」の幅で出しています。<b>少なめで入れて味見</b>してから足してください。' : ''}${f > 1 ? '<br>煮込みの水分や加熱時間は鍋の大きさで変わるので様子を見てください。' : ''}</div>` : ''}</div>` : ''}
+    ${ing.length ? `<div class="sec"><h3>🧺 材料${srv ? `<span class="srvs">（${f !== 1 && cur && base ? esc(cur.label + '分') : esc(srv)}）</span>` : ''}</h3>${li(ingS, 'i')}</div>` : ''}
+    ${steps.length ? `<div class="sec"><h3>👩‍🍳 作り方</h3>${li(stepS, 's')}</div>` : ing.length ? `<div class="sec note">👩‍🍳 作り方は文字で書かれていません（動画の中だけ）。▶で動画を見るか、コメント欄にあればスクショで追加してください。</div>` : ''}
     ${rest.length ? `<div class="sec"><h3>📝 メモ</h3><div class="pre">${esc(rest.join('\n'))}</div></div>` : ''}
     ${r.url && !r.captionFetched ? `<div class="row"><button class="btn sub" id="cap">🔄 インスタのキャプションを取得</button></div>` : ''}
     ${!r.text ? `<div class="sec note">まだレシピの文字がありません。コメントのレシピはスクショを「＋スクショ読取」で追加してください。</div>` : ''}
@@ -251,6 +262,7 @@ async function detailView(id) {
   $('#edit').onclick = () => { location.hash = `#/r/${id}/edit`; };
   const capBtn = $('#cap');
   if (capBtn) capBtn.onclick = async () => { capBtn.disabled = true; if (await autoCaption(r)) { await put(r); } detailView(id); };
+  view.querySelectorAll('.sbtn').forEach(b => b.onclick = async () => { r.scale = +b.dataset.f; await put(r); const y = scrollY; await detailView(id); scrollTo(0, y); });
   $('#reset').onclick = async () => { r.done = []; await put(r); detailView(id); };
   $('#addShot').onclick = () => pickImages(async files => { await appendImages(r, files); detailView(id); });
 }
