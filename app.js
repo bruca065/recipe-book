@@ -1,4 +1,4 @@
-import { FOLDERS, classify, splitRecipe, guessTitle } from './classify.js';
+import { FOLDERS, classify, splitRecipe, guessTitle, guessServings } from './classify.js';
 
 // ---------- DB ----------
 let dbp;
@@ -208,7 +208,7 @@ function card(r) {
   const f = folder(r.folder);
   const cv = r.images?.[0] ? `<img src="${blobUrl(r.images[0])}" alt="">` :
     r.cover ? `<img src="${esc(r.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith('${f.emoji}')">` : f.emoji;
-  return `<button class="card" data-id="${r.id}"><div class="cv">${cv}</div><div class="t">${esc(r.title)}</div><div class="f">${f.emoji} ${f.label}${r.fav ? ' ⭐' : ''}</div></button>`;
+  return `<button class="card" data-id="${r.id}"><div class="cv">${cv}</div><div class="t">${esc(r.title)}</div><div class="f">${f.emoji} ${f.label}${r.fav ? ' ⭐' : ''}${(sv => sv ? ` · 🍽${esc(sv)}` : '')(guessServings(r.text))}</div></button>`;
 }
 
 // ---------- 詳細（料理モード：画面点灯キープ） ----------
@@ -217,6 +217,7 @@ async function detailView(id) {
   if (!r) { location.hash = '#/'; return; }
   setHeader(r.title, true);
   const { ing, steps, rest } = splitRecipe(r.text);
+  const srv = guessServings(r.text);
   const done = new Set(r.done || []);
   const li = (arr, p) => arr.map((l, i) => /^[【\[《〈＜<◆■][^】\]》〉＞>]{1,20}[】\]》〉＞>◆■]$/.test(l) ? `<div class="subh"><b>${esc(l)}</b></div>` : `<label class="chk ${done.has(p + i) ? 'done' : ''}"><input type="checkbox" data-k="${p + i}" ${done.has(p + i) ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('');
   view.innerHTML = `<div class="wrap big">
@@ -226,7 +227,8 @@ async function detailView(id) {
       <button class="btn sub" id="fav">${r.fav ? '⭐' : '☆'}</button>
     </div>
     ${r.url ? `<div class="row"><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">▶ インスタで動画を見る</a></div>` : ''}
-    ${ing.length ? `<div class="sec"><h3>🧺 材料</h3>${li(ing, 'i')}</div>` : ''}
+    ${srv ? `<div class="srv">🍽 分量：<b>${esc(srv)}</b></div>` : ''}
+    ${ing.length ? `<div class="sec"><h3>🧺 材料${srv ? `<span class="srvs">（${esc(srv)}）</span>` : ''}</h3>${li(ing, 'i')}</div>` : ''}
     ${steps.length ? `<div class="sec"><h3>👩‍🍳 作り方</h3>${li(steps, 's')}</div>` : ing.length ? `<div class="sec note">👩‍🍳 作り方は文字で書かれていません（動画の中だけ）。▶で動画を見るか、コメント欄にあればスクショで追加してください。</div>` : ''}
     ${rest.length ? `<div class="sec"><h3>📝 メモ</h3><div class="pre">${esc(rest.join('\n'))}</div></div>` : ''}
     ${r.url && !r.captionFetched ? `<div class="row"><button class="btn sub" id="cap">🔄 インスタのキャプションを取得</button></div>` : ''}

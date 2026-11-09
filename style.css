@@ -50,3 +50,7 @@ textarea.in{min-height:220px;line-height:1.6}
 .frow .grip{flex:none;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:1.4em;color:var(--sub);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border-radius:8px}
 .frow.drag{background:var(--acc2);border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.18);position:relative;z-index:2}
 .frow.drag .grip{cursor:grabbing;color:var(--acc)}
+
+.srv{margin:4px 0 10px;font-size:1.05em}
+.srv b{color:var(--acc)}
+.srvs{font-weight:normal;font-size:.9em;margin-left:4px;color:var(--sub,#666)}

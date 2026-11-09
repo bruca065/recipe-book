@@ -125,3 +125,15 @@ export function guessTitle(text) {
   }
   return '無題のレシピ';
 }
+
+// 「2人分」「3〜4人前」「材料（4個分）」などの分量表記を拾う（人数を最優先）
+const SV_NUM = String.raw`(?:約\s*)?[\d一二三四五六七八九十]+(?:\.\d+)?(?:\s*[〜~\-−・]\s*[\d一二三四五六七八九十]+)?`;
+const SV_PEOPLE = new RegExp(String.raw`${SV_NUM}\s*(?:人前|人分|人份|名分|食分|皿分|人用)`);
+const SV_OTHER = new RegExp(String.raw`(?:(?:直径)?\s*\d+\s*(?:cm|センチ)\s*(?:の|パウンド|丸|角)?\s*型\s*)?${SV_NUM}\s*(?:個分|枚分|本分|台分|杯分|切れ分|カップ分|合分|回分|食分|玉分)`);
+export function guessServings(text) {
+  const t = (text || '').normalize('NFKC');
+  // 「個分・枚分」は材料行（ご飯 1杯分 等）と紛らわしいので、材料見出し・分量・カッコ書きの行だけで探す
+  const m = t.match(SV_PEOPLE) ||
+    t.split(/\n/).filter(l => /材料|分量|できあがり|出来上がり|[(（【<＜]/.test(l)).map(l => l.match(SV_OTHER)).find(Boolean);
+  return m ? m[0].replace(/\s+/g, '').replace(/[~\-−]/g, '〜') : '';
+}
