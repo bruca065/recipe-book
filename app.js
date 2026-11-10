@@ -1,4 +1,4 @@
-import { FOLDERS, classify, splitRecipe, guessTitle, guessServings, baseServings, scaleLine } from './classify.js';
+import { FOLDERS, classify, splitRecipe, guessTitle, guessServings, baseServings, scaleLine, cleanOcrLines } from './classify.js';
 
 // ---------- DB ----------
 let dbp;
@@ -147,7 +147,8 @@ async function ocr(blobs, onProg) {
   for (let i = 0; i < blobs.length; i++) {
     onProg?.(`文字を読み取り中… ${i + 1}/${blobs.length}`);
     const { data } = await worker.recognize(blobs[i]);
-    out.push(cleanOcr(data.text));
+    // 行ごとの信頼度を使って、絵文字の誤認やインスタの画面文字（返信・ユーザー名等）を除く
+    out.push(data.lines?.length ? cleanOcrLines(data.lines) : cleanOcr(data.text));
   }
   return out.join('\n\n');
 }

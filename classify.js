@@ -72,7 +72,9 @@ const QTY = '[\\d０-９]|大さじ|小さじ|大匙|小匙|適量|少々|適宜
 const ING_LINE = new RegExp(`^[・\\-◯◎●○◆*＊]?\\s*[^\\s。]{1,20}?[\\s　:：…]+(?:${QTY})[^。！!？?]{0,12}$`);
 const BULLET = /^[・◯◎●○＊*]\s*[^。！!？?\s]{1,18}$/;
 const SUBHEAD = /^[【\[《〈＜<◆■]?[^\s。、]{1,14}[】\]》〉＞>◆■]?[:：]?$/;
-const isIng = l => ING_LINE.test(l);
+// 「・お米2合」「・バター10g」のように名前と量の間に空白が無い箇条書き
+const ING_TIGHT = new RegExp(`^[・◯◎●○◆*＊]\s*[^\s。\d０-９]{1,15}?(?:${QTY})[^。！!？?]{0,12}$`);
+const isIng = l => ING_LINE.test(l) || ING_TIGHT.test(l);
 const SEP = /^[-–—_=─━⸻]{2,}/;
 
 export function splitRecipe(text) {
@@ -101,7 +103,7 @@ export function splitRecipe(text) {
     if (!STEP_MARK.test(l)) {
       const next = lines[i + 1] || '', next2 = lines[i + 2] || '';
       const ingNext = isIng(next) || (BULLET.test(next) && isIng(next2));
-      if (SUBHEAD.test(l) && !BULLET.test(l) && ingNext) { ing.push(l); mode = 'ing'; auto = true; return; }
+      if (SUBHEAD.test(l) && !BULLET.test(l) && !/(ください|です|ます|ました|ね|よ|[！!♪])$/.test(l) && ingNext) { ing.push(l); mode = 'ing'; auto = true; return; }
       if (isIng(l) && (ingNext || BULLET.test(next))) { ing.push(l); mode = 'ing'; auto = true; return; }
       if (mode !== 'steps' && BULLET.test(l) && isIng(next)) { ing.push(l); mode = 'ing'; auto = true; return; }
     }
@@ -196,4 +198,33 @@ export function scaleLine(line, f, onlyUnits = false) {
     return out(v);
   });
   return { text, season: season && f > 1 && changed, changed };
+}
+
+// ---------- OCR結果の掃除（スクショ由来のゴミ行・絵文字の誤認を除く） ----------
+// lines: tesseract の data.lines（各行に words[{text,confidence}]）
+const UI_LINE = [
+  /^返信/, /他\s*\d+\s*件の返信/, /^コメント$/, /投稿者/, /へのコメ/, /リール動画/, /もう一度見る/,
+  /翻訳を見る/, /^いいね/, /^[\d,.]+[万千]?$/, /^\d{1,2}:\d{2}/,
+  /[\w.]{3,}\s*\d+\s*(週間|日前?|時間前?|分前?|か月|ヶ月|年前?)/, // ユーザー名＋投稿時刻
+  /^[@＠⑧©]?[A-Za-z0-9_.]{3,}$/, // ユーザー名だけの行
+  /[@＠⑧©][A-Za-z0-9_.]{3,}/, // @メンションを含む行
+];
+const KANA = /^[\u3040-\u30ff()（）]{2,}$/;
+const J = '[\u3000-\u30ff\u4e00-\u9fff\uff00-\uffef]';
+export function cleanOcrLines(lines) {
+  const out = [];
+  for (const l of lines) {
+    const ws = (l.words || []).filter(w => w.text.trim());
+    if (!ws.length) { out.push(''); continue; }
+    // 信頼度の低い語は捨てる（絵文字やアイコンの誤認）。ただし2文字以上のかなは残す（「さい」等）
+    const keep = ws.filter(w => w.confidence >= 40 || KANA.test(w.text));
+    if (keep.length < ws.length * 0.6) continue; // 半分近くがゴミ＝画面の飾り
+    let t = keep.map(w => w.text).join(' ');
+    t = t.replace(new RegExp(`(${J}) +(?=${J})`, 'g'), '$1').replace(new RegExp(`(${J}) +(?=[0-9])|([0-9]) +(?=${J})`, 'g'), '$1$2')
+      .replace(/([(（]) +/g, '$1').replace(/ +([)）])/g, '$1').replace(new RegExp(`(${J}) +(?=[(（])`, 'g'), '$1').trim();
+    if (!t || UI_LINE.some(re => re.test(t))) continue;
+    if (!/[\u3040-\u30ff\u4e00-\u9fffA-Za-z0-9]/.test(t)) continue;
+    out.push(t);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
